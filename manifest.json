@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "卡通形象快存",
+  "version": "0.3.2",
+  "description": "把网页里看到的形象截图压缩后，快速保存到卡通工作台的种子形象库。",
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "downloads",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://xhs.typoai.xin/*"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "卡通形象快存",
+    "default_popup": "popup.html"
+  }
+}

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>卡通形象快存</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div class="mark" aria-hidden="true">收</div>
+      <div><h1>卡通形象快存</h1><p>截图清晰度 · 保存为本地文件 · 自动上传</p></div>
+    </header>
+
+    <section class="category-card">
+      <label for="category">以后默认保存到</label>
+      <div class="category-row">
+        <select id="category" aria-label="默认保存分类"></select>
+        <button type="button" class="small" id="syncCategories">同步</button>
+      </div>
+      <p>改一次就会一直沿用，右键保存时不再重复询问。</p>
+    </section>
+
+    <section class="hover-card">
+      <label><input id="hoverEnabled" type="checkbox"><span>鼠标悬停时显示“快存”浮标</span></label>
+      <p>首次开启时，Chrome 会询问网页访问权限；关闭后立即移除浮标。</p>
+    </section>
+
+    <div class="capture-actions">
+      <button type="button" class="primary" id="pickImage">点选网页里的图片</button>
+      <button type="button" class="region" id="pickRegion">框选网页区域</button>
+    </div>
+    <p class="tip">可以点选整张图片，也可以拖框只保存需要的局部；图片上点右键也能快速保存。</p>
+
+    <section class="status-card" id="statusCard" aria-live="polite"></section>
+    <div class="actions">
+      <button type="button" id="showLocalFile">在文件夹中显示</button>
+      <button type="button" id="openAdmin">打开卡通工作台</button>
+    </div>
+  </main>
+  <script src="shared.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
