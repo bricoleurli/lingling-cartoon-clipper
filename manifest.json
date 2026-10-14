@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "卡通形象快存",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "把网页里看到的形象截图压缩后，快速保存到卡通工作台的种子形象库。",
   "permissions": [
     "activeTab",

@@ -1,6 +1,10 @@
-importScripts("shared.js");
+importScripts("shared.js", "pending-uploads.js");
 
 const Shared = globalThis.CartoonClipperShared;
+const PendingUploads = globalThis.CartoonClipperPendingUploads;
+const pendingQueue = PendingUploads.createQueue({
+  store: PendingUploads.createIndexedDbStore(),
+});
 const ADMIN_ORIGIN = "https://xhs.typoai.xin";
 const ADMIN_PAGE = `${ADMIN_ORIGIN}/admin/cartoon`;
 const MENU_ID = "save-cartoon-seed";
@@ -21,13 +25,26 @@ chrome.runtime.onInstalled.addListener(async () => {
   if (!state.defaultCategory) await chrome.storage.local.set({ defaultCategory: "未分类" });
   await migrateLegacyQueueToLocalFolder();
   await ensureHoverRegistration();
-  await updateBadge();
+  await updatePendingState();
+  retryPendingUploads().catch(() => {});
 });
 
 chrome.runtime.onStartup.addListener(() => {
   migrateLegacyQueueToLocalFolder().catch(() => {});
   ensureHoverRegistration().catch(() => {});
-  updateBadge();
+  updatePendingState().catch(() => {});
+  retryPendingUploads().catch(() => {});
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete" || !isAdminSiteUrl(tab?.url)) return;
+  retryPendingUploads({ tabId }).catch(() => {});
+});
+
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!isAdminSiteUrl(tab?.url)) return;
+  retryPendingUploads({ tabId }).catch(() => {});
 });
 
 chrome.permissions.onRemoved.addListener((permissions) => {
@@ -97,6 +114,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await syncCategories({ createTab: true, focus: true });
       return publicState();
     }
+    if (message?.type === "RETRY_PENDING") {
+      const pendingCount = await pendingQueue.count();
+      if (pendingCount) await retryPendingUploads({ createTab: true, focus: true });
+      return publicState();
+    }
     if (message?.type === "OPEN_ADMIN") {
       await openOrFindAdminTab({ active: true });
       return { ok: true };
@@ -114,6 +136,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function publicState() {
   const state = await chrome.storage.local.get(["defaultCategory", "categories", "lastSaved", "lastUploaded", "lastUploadError", "lastError", "hoverEnabled"]);
   const hoverPermission = await chrome.permissions.contains({ origins: CAPTURE_PERMISSION_ORIGINS });
+  const pendingCount = await pendingQueue.count();
   return {
     defaultCategory: Shared.normalizeCategory(state.defaultCategory),
     categories: Array.isArray(state.categories) ? state.categories : [],
@@ -123,6 +146,7 @@ async function publicState() {
     lastError: state.lastError ? Shared.humanizeError(state.lastError) : "",
     hoverEnabled: Boolean(state.hoverEnabled && hoverPermission),
     hoverPermission,
+    pendingCount,
   };
 }
 
@@ -215,8 +239,10 @@ async function captureDescriptor(tab, descriptor) {
     sourceTabId: tab.id,
   };
   const saved = await saveLocalImage(item);
+  await pendingQueue.enqueue(item);
   await chrome.storage.local.set({
     lastSaved: {
+      clipId: item.id,
       downloadId: saved.downloadId,
       filename: saved.filename,
       relativePath: saved.relativePath,
@@ -227,18 +253,12 @@ async function captureDescriptor(tab, descriptor) {
     lastUploadError: "",
     lastError: "",
   });
-  await updateBadge();
-  await showToast(tab.id, `已保存到本地“${item.category}”文件夹`, "success");
+  await updatePendingState();
+  await showToast(tab.id, `已保存到本地“${item.category}”文件夹，等待上传`, "success");
 
-  const upload = await uploadToExistingAdminTab(item);
-  if (upload?.ok) {
-    await chrome.storage.local.set({
-      lastUploaded: { id: upload.asset?.id || "", name: item.name, category: item.category, uploadedAt: new Date().toISOString() },
-      lastUploadError: "",
-    });
+  const upload = await retryPendingUploads();
+  if (upload?.ok && upload.uploadedCount) {
     await showToast(tab.id, `本地已保留，并上传到“${item.category}”`, "success");
-  } else if (upload?.attempted) {
-    await chrome.storage.local.set({ lastUploadError: upload.error || "后台暂时无法连接" });
   }
 }
 
@@ -394,13 +414,55 @@ async function showLastLocalFile() {
   await chrome.downloads.showDefaultFolder();
 }
 
-async function uploadToExistingAdminTab(item) {
-  const tab = await openOrFindAdminTab({ active: false, create: false });
-  if (!tab?.id) return { attempted: false, ok: false };
+async function retryPendingUploads({ tabId = null, createTab = false, focus = false } = {}) {
+  const pendingCount = await pendingQueue.count();
+  if (!pendingCount) {
+    await updatePendingState(0);
+    return { ok: true, attempted: false, uploadedCount: 0, pendingCount: 0, error: "" };
+  }
+  const tab = tabId
+    ? await chrome.tabs.get(tabId).catch(() => null)
+    : await openOrFindAdminTab({ active: focus, create: createTab });
+  if (!tab?.id || !isAdminSiteUrl(tab.url || tab.pendingUrl)) {
+    await updatePendingState(pendingCount);
+    return { ok: false, attempted: false, uploadedCount: 0, pendingCount, error: "" };
+  }
+  if (focus) await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+  if (tab.status !== "complete") {
+    try {
+      await waitForTabComplete(tab.id, 15000);
+    } catch (error) {
+      const message = Shared.humanizeError(error, "后台页面打开超时");
+      await chrome.storage.local.set({ lastUploadError: message });
+      await updatePendingState();
+      return { ok: false, attempted: true, uploadedCount: 0, pendingCount: await pendingQueue.count(), error: message };
+    }
+  }
+  const result = await pendingQueue.flush((item) => uploadPendingItem(tab.id, item));
+  if (!result.ok && result.attempted) {
+    await chrome.storage.local.set({ lastUploadError: result.error || "后台暂时无法连接" });
+  } else if (result.ok) {
+    await chrome.storage.local.set({ lastUploadError: "" });
+  }
+  await updatePendingState(result.pendingCount);
+  if (result.uploadedCount) syncCategories({ tabId: tab.id, createTab: false }).catch(() => {});
+  return result;
+}
+
+async function uploadPendingItem(tabId, item) {
   try {
-    if (tab.status !== "complete") await waitForTabComplete(tab.id, 15000);
-    const result = await runOnAdminPage(tab.id, uploadSeedFromAdminPage, [item]);
-    if (result?.ok) syncCategories({ tabId: tab.id, createTab: false }).catch(() => {});
+    const result = await runOnAdminPage(tabId, uploadSeedFromAdminPage, [item]);
+    if (!result?.ok) return { attempted: true, ...result };
+    await chrome.storage.local.set({
+      lastUploaded: {
+        clipId: item.id,
+        id: result.asset?.id || "",
+        name: item.name,
+        category: item.category,
+        uploadedAt: new Date().toISOString(),
+      },
+      lastUploadError: "",
+    });
     return { attempted: true, ...result };
   } catch (error) {
     return { attempted: true, ok: false, error: Shared.humanizeError(error, "后台暂时无法连接") };
@@ -431,11 +493,15 @@ async function openOrFindAdminTab({ active = false, create = true } = {}) {
   const tabs = await chrome.tabs.query({ url: `${ADMIN_ORIGIN}/*` });
   const existing = tabs.find((tab) => String(tab.url || "").includes("/admin/cartoon")) || tabs[0];
   if (existing) {
-    if (active) await chrome.tabs.update(existing.id, { active: true, url: ADMIN_PAGE });
+    if (active) return chrome.tabs.update(existing.id, { active: true, url: ADMIN_PAGE });
     return existing;
   }
   if (!create) return null;
   return chrome.tabs.create({ url: ADMIN_PAGE, active });
+}
+
+function isAdminSiteUrl(url) {
+  return String(url || "").startsWith(`${ADMIN_ORIGIN}/`);
 }
 
 async function waitForTabComplete(tabId, timeoutMs) {
@@ -468,9 +534,14 @@ async function runOnAdminPage(tabId, func, args) {
   return results?.[0]?.result;
 }
 
-async function updateBadge() {
-  await chrome.action.setBadgeText({ text: "" });
-  await chrome.action.setTitle({ title: "卡通形象快存：图片保存到本地文件夹" });
+async function updatePendingState(count = null) {
+  const pendingCount = Number.isInteger(count) ? count : await pendingQueue.count();
+  await chrome.storage.local.set({ pendingCount });
+  await chrome.action.setBadgeBackgroundColor({ color: "#f97316" });
+  await chrome.action.setBadgeText({ text: pendingCount ? (pendingCount > 99 ? "99+" : String(pendingCount)) : "" });
+  const suffix = pendingCount ? `，${pendingCount} 张等待上传` : "，没有待上传图片";
+  await chrome.action.setTitle({ title: `卡通形象快存：图片保存到本地文件夹${suffix}` });
+  return pendingCount;
 }
 
 async function reportCaptureError(tabId, error) {

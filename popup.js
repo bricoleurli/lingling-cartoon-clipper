@@ -3,6 +3,7 @@ const CAPTURE_PERMISSION_ORIGINS = ["<all_urls>"];
 const categoryInput = document.getElementById("category");
 const statusCard = document.getElementById("statusCard");
 const hoverEnabled = document.getElementById("hoverEnabled");
+const retryPending = document.getElementById("retryPending");
 
 document.getElementById("pickImage").addEventListener("click", async () => {
   await saveCategory();
@@ -19,6 +20,7 @@ document.getElementById("pickRegion").addEventListener("click", async () => {
 });
 
 document.getElementById("syncCategories").addEventListener("click", () => runBusy("syncCategories", { type: "SYNC_CATEGORIES" }));
+retryPending.addEventListener("click", () => runBusy("retryPending", { type: "RETRY_PENDING" }));
 document.getElementById("showLocalFile").addEventListener("click", () => runBusy("showLocalFile", { type: "SHOW_LOCAL_FILE" }));
 document.getElementById("openAdmin").addEventListener("click", async () => {
   await send({ type: "OPEN_ADMIN" });
@@ -82,6 +84,9 @@ async function refresh() {
 
 function render(state) {
   if (document.activeElement !== hoverEnabled) hoverEnabled.checked = Boolean(state.hoverEnabled);
+  const pendingCount = Number(state.pendingCount || 0);
+  retryPending.disabled = pendingCount === 0;
+  retryPending.textContent = pendingCount ? `立即补传（${pendingCount}）` : "没有待补传图片";
   const selected = state.defaultCategory || "未分类";
   const names = [...new Set([selected, ...(state.categories || [])])];
   categoryInput.innerHTML = "";
@@ -95,11 +100,16 @@ function render(state) {
   const synced = Number(state.categories?.length || 0);
   if (state.lastSaved) {
     const localPath = state.lastSaved.relativePath || `卡通形象快存/${state.lastSaved.category || "未分类"}`;
-    const uploadStatus = state.lastUploaded?.name === state.lastSaved.name
+    const latestUploaded = state.lastUploaded?.clipId
+      ? state.lastUploaded.clipId === state.lastSaved.clipId
+      : state.lastUploaded?.name === state.lastSaved.name;
+    const uploadStatus = pendingCount
+      ? state.lastUploadError
+        ? `<br><span class="pending">还有 ${pendingCount} 张待上传：${escapeHtml(state.lastUploadError)}。打开并登录后台后会自动补传。</span>`
+        : `<br><span class="pending">还有 ${pendingCount} 张待上传；打开并登录后台后会自动补传。</span>`
+      : latestUploaded
       ? `<br><span class="ok">同时已上传卡通工作台</span>`
-      : state.lastUploadError
-        ? `<br><span>后台未上传：${escapeHtml(state.lastUploadError)}；本地文件不受影响。</span>`
-        : `<br><span>文件已保留在电脑中。</span>`;
+      : `<br><span>文件已保留在电脑中。</span>`;
     statusCard.innerHTML = `<strong class="ok">最近图片已保存到本地</strong>${escapeHtml(localPath)}${uploadStatus}`;
     return;
   }

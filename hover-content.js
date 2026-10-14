@@ -1,5 +1,5 @@
 (function () {
-  const SCRIPT_VERSION = "0.3.2";
+  const SCRIPT_VERSION = "0.4.0";
   const staleHost = document.getElementById("xhs-cartoon-clipper-hover-root");
   if (globalThis.__xhsCartoonClipperHoverVersion === SCRIPT_VERSION && staleHost) return;
   staleHost?.remove();

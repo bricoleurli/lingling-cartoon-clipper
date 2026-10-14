@@ -29,5 +29,8 @@ button.small { padding-inline: 10px; }
 .status-card strong { display: block; margin-bottom: 3px; }
 .status-card .ok { color: #15803d; }
 .status-card .error { color: #b91c1c; }
+.status-card .pending { color: #c2410c; }
 .status-card ul { margin: 7px 0 0; padding-left: 18px; color: #596579; }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.actions .retry { grid-column: 1 / -1; border-color: #f97316; color: #c2410c; background: #fff7ed; font-weight: 700; }
+.actions .retry:hover { background: #ffedd5; }
